@@ -39,19 +39,81 @@ def extract_images_from_messages(messages):
     else:
         return images
 
-def distill_item_details(text=""):
-    prompt = f"""
-        Convert this transcription into a bulleted list of facts about the item. 
 
-        Transcription: {text}
+
+
+# raw transcript
+# extract stated facts
+    # consolidate item description
+    # extract visual features
+# generate embedding text
+# generate classification label
+
+
+
+
+# done
+def extract_stated_facts(transcription=""):
+    prompt = f"""
+        Transcription: {transcription}
+
+        List ONLY what was explicitly stated about the item.
+        Do not interpret, assume, or guess what the item might be.
+
+        Format: This is a fact, fact, fact, etc.
     """
     return prompt
 
-def extract_visual_features(text=""):
+# in progress
+def extract_visual_features(user_description=""):
     prompt = f"""
-        The user describes this item as "{text}"
+        User calls this: "{user_description}"
+        
+        List what you see in the image:
+        - Item type
+        - Colors (be specific)
+        - Materials
+        - Distinctive features
+        - Brand indicators (if visible)
+        
+        Use simple bullet points.
+    """
+    return prompt
 
-        Convert this item description into a bulleted list of observable facts about the item.
+# in progress
+def generate_embedding_text(user_description, visual_facts):
+    prompt = f"""
+        User description: "{user_description}"
+        Visual facts: {visual_facts}
+        
+        Write a paragraph combining both perspectives.
+        Include what the user calls it and the visual details.
+        Make it conversational but informative.
+        
+        Combined description:
+    """
+    return prompt
+
+# in progress
+def generate_classification_label(visual_facts):
+    prompt = f"""
+        Visual facts: {visual_facts}
+        
+        Write one clear sentence describing this item for image matching.
+        Start with "a" or "an". Include key visual features.
+        Keep it natural but concise, like a caption.
+        
+        Label:
+    """
+    return prompt
+
+# in progress
+def consolidate_item_description(stated_facts):
+    prompt = f"""
+        Stated facts: {stated_facts}
+        
+        What is this item? Answer in 3-6 words.
+        Include color/brand if mentioned.        
     """
     return prompt
 
@@ -77,7 +139,7 @@ processor = AutoProcessor.from_pretrained(
     max_pixels=max_pixels
 )
 
-image = Image.open("samples/heel.png")
+image = Image.open("samples/purse.png")
 
 messages = [
     {
@@ -100,43 +162,25 @@ messages = [
             #     "text": extract_all_context(text),
             # },
 
-            # {
-            #     "type": "text",
-            #     "text": f"""
-            #         Write a concise description with item type, brand, color, material, and key visual features.
-
-                    # - The item is a pair of black Louboutin high-heeled shoes.
-                    # - They are super high heels, approximately 5-6 inches tall.
-                    # - The shoes feature a platform at the front, making them wearable despite their height.    
-                    # - The material is leather, described as smooth and of high quality.
-                    # - The exact name of the shoe model is uncertain, possibly "Daffodils" or something similar.
-                    # - The shoes were purchased for a promotion celebration dinner.
-                    # - The red soles are a signature feature of Louboutin shoes.
-                    # - The heel height is likely around 5-6 inches, confirmed to be over 5 inches.
-                    # - The wearer has worn them only three or four times in total.
-                    # - They are considered special occasion shoes due to their discomfort.
-                    # - Despite being uncomfortable, the wearer still loves them.
-                    # - The shoes are in excellent condition and stored in a dust bag.
-                    # - The size is 38.5, equivalent to an 8 in US sizes.
-                    # - They are classic black pumps but considered a fancy version.
-                    # - They are versatile and can match various outfits.
-            #     """
-            # }
             {
                 "type": "image",
                 "image": image,
             },
             {
                 "type": "text",
-                "text": f"""
-                    The user describes this item as "My red bottoms".
-
-                    Convert this item description into a bulleted list of observable facts about the item.
-                """
-            }
+                # "text": consolidate_item_description("My red bottoms"),
+                "text": consolidate_item_description("This is a black Chanel bag, quilted with a diamond pattern, made of caviar leather. It has gold hardware, a chain strap, and a CC turnlock. It was bought as a gift for the person's 30th birthday while they were in Paris. The bag is used for special occasions like dinner dates or events. It has a tiny scratch on the back and burgundy lining inside. There is a small pocket with a zipper and an open pocket inside.")
+                # "text": extract_stated_facts("my black Chanel bag"),
+                # "text": extract_stated_facts("Okay so this is my black Chanel bag... it's the classic flap, um, I think it's called the medium or maybe the large? I always forget. It's the quilted one with the diamond pattern... caviar leather I think is what they call it. Got it for my 30th birthday from my husband, we were in Paris actually. It has the gold hardware, the chain... you can wear it crossbody or doubled up on the shoulder. Oh and it has the CC turnlock thing on the front. I usually use this for special occasions, like dinner dates or events. It's in pretty good condition, there's like a tiny scratch on the back but you can barely see it. Oh wait, I should mention it has the burgundy lining inside... maroon? Whatever that dark red color is called. There's a little pocket inside with a zipper and then an open pocket too. Still have the authenticity card somewhere."),
+            },
         ],
     }
 ]
+
+# Layer 0: raw transcription input
+# layer 1: extract stated facts
+# layer 2: extract visual features
+# layer 3: generate alternative descriptions
 
 text = processor.apply_chat_template(
     messages, 
