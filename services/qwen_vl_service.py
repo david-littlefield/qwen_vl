@@ -45,6 +45,15 @@ class QwenVLServer(ModelServer):
     
     def _process_request(self, model, request_data):
         task = request_data["task"]
+        if task == "test":
+            images = request_data.get("images", [])
+            prompt = request_data["prompt"]
+            max_tokens = request_data.get("max_tokens", 512)
+            if images:
+                messages = model._prepare_image_messages(images, prompt)
+            else:
+                messages = model._prepare_text_messages(prompt)
+            return model._generate(messages, max_new_tokens=max_tokens)
         image_urls = request_data.get('image_urls', [])
         images = self._load_images(image_urls)
         text = request_data.get("text", "")

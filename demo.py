@@ -112,7 +112,7 @@ def consolidate_item_description(stated_facts):
     prompt = f"""
         Stated facts: {stated_facts}
         
-        What is this item? Answer in 3-6 words.
+        What item is this? Answer in 3-6 words.
         Include color/brand if mentioned.        
     """
     return prompt

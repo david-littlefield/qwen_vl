@@ -55,6 +55,37 @@ def health():
             "details": status
         }), 503
 
+from PIL import Image
+@application.route("/test", methods=["POST"])
+def test():
+    try:
+        images = []
+        image_count = 0
+        while f'image_{image_count}' in request.files:
+            image_file = request.files[f'image_{image_count}']
+            image_buffer = image_file.stream
+            image = Image.open(image_buffer)
+            image = image.convert('RGB')
+            images.append(image)
+            image_count += 1
+        prompt = request.form.get("prompt")
+        if not prompt:
+            return jsonify({"error": "Prompt parameter required"}), 400        
+        max_tokens = int(request.form.get("max_tokens", 512))
+        result = qwen_vl_server.submit_request({
+            "task": "test",
+            "images": images,
+            "prompt": prompt,
+            "max_tokens": max_tokens
+        })
+        if result["success"]:
+            return jsonify({"output": result["result"]})
+        else:
+            return jsonify({"error": result["error"]}), 500  
+    except Exception as error:
+        print(f"Test request error: {str(error)}")
+        return jsonify({"error": str(error)}), 500
+
 if __name__ == "__main__":
     application.run(
         host="0.0.0.0",

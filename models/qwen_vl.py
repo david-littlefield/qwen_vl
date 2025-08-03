@@ -1,5 +1,5 @@
 import torch
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from PIL import Image
 
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -13,7 +13,7 @@ MAXIMUM_PIXELS = 1280 * 28 * 28
 class QwenVLModel:
     def __init__(self):
         print(f"Loading Qwen-VL model: {MODEL_ID}")
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        self.model = AutoModelForImageTextToText.from_pretrained(
             MODEL_ID,
             torch_dtype = torch.float16,
             quantization_config = QUANTIZATION_CONFIGURATION,
