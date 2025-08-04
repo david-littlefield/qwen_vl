@@ -42,12 +42,6 @@ def extract_images_from_messages(messages):
 
 
 
-# raw transcript
-# extract stated facts
-    # consolidate item description
-    # extract visual features
-# generate embedding text
-# generate classification label
 
 
 
@@ -177,11 +171,6 @@ messages = [
     }
 ]
 
-# Layer 0: raw transcription input
-# layer 1: extract stated facts
-# layer 2: extract visual features
-# layer 3: generate alternative descriptions
-
 text = processor.apply_chat_template(
     messages, 
     tokenize=False, 
@@ -216,22 +205,3 @@ output_text = processor.batch_decode(
 
 print(output_text[0])
 print(f"\nInference time: {inference_time:.2f} seconds")
-
-def format_to_paragraph(bulleted_text):
-    lines = bulleted_text.strip().split("\n")
-    cleaned_lines = []
-    for line in lines:
-        cleaned = line.lstrip("- ").strip()
-        cleaned = cleaned.replace("•", "").strip()
-        if cleaned:
-            cleaned_lines.append(cleaned)
-    paragraph = " ".join(cleaned_lines)
-    while "  " in paragraph:
-        paragraph = paragraph.replace("  ", " ")    
-    paragraph = paragraph.replace('"', "'")
-    return paragraph
-
-paragraph_output = format_to_paragraph(output_text[0])
-
-print("\nFormatted Paragraph:")
-print(paragraph_output)
