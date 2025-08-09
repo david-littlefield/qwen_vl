@@ -4,6 +4,15 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
 
 import json
+
+
+
+
+
+
+
+
+
 from flask import Flask, request, jsonify
 from services.qwen_vl_service import QwenVLServer
 

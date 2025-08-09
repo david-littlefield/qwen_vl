@@ -3,10 +3,86 @@ import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
 
-from transformers import AutoModel, AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
-import time
+from transformers import AutoModel, AutoTokenizer, BitsAndBytesConfig
 import torch
+import time
+import math
+import numpy as np
+import torchvision.transforms as T
 from PIL import Image
+from torchvision.transforms.functional import InterpolationMode
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def build_transform(input_size):
+    MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
+    transform = T.Compose([
+        T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
+        T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+        T.ToTensor(),
+        T.Normalize(mean=MEAN, std=STD)
+    ])
+    return transform
+
+def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+    best_ratio_diff = float('inf')
+    best_ratio = (1, 1)
+    area = width * height
+    for ratio in target_ratios:
+        target_aspect_ratio = ratio[0] / ratio[1]
+        ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+        if ratio_diff < best_ratio_diff:
+            best_ratio_diff = ratio_diff
+            best_ratio = ratio
+        elif ratio_diff == best_ratio_diff:
+            if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                best_ratio = ratio
+    return best_ratio
+
+def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbnail=False):
+    orig_width, orig_height = image.size
+    aspect_ratio = orig_width / orig_height
+    target_ratios = set(
+        (i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1) if
+        i * j <= max_num and i * j >= min_num)
+    target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
+    target_aspect_ratio = find_closest_aspect_ratio(
+        aspect_ratio, target_ratios, orig_width, orig_height, image_size)
+    target_width = image_size * target_aspect_ratio[0]
+    target_height = image_size * target_aspect_ratio[1]
+    blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+    resized_img = image.resize((target_width, target_height))
+    processed_images = []
+    for i in range(blocks):
+        box = (
+            (i % (target_width // image_size)) * image_size,
+            (i // (target_width // image_size)) * image_size,
+            ((i % (target_width // image_size)) + 1) * image_size,
+            ((i // (target_width // image_size)) + 1) * image_size
+        )
+        split_img = resized_img.crop(box)
+        processed_images.append(split_img)
+    if use_thumbnail and len(processed_images) != 1:
+        thumbnail_img = image.resize((image_size, image_size))
+        processed_images.append(thumbnail_img)
+    return processed_images
+
+def load_image(image_file, input_size=448, max_num=12):
+    if isinstance(image_file, Image.Image):
+        image = image_file.convert('RGB')
+    else:
+        image = Image.open(image_file).convert('RGB')
+    transform = build_transform(input_size=input_size)
+    images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
+    pixel_values = [transform(image) for image in images]
+    pixel_values = torch.stack(pixel_values)
+    return pixel_values
+
+
+
+
 
 def prepare_inputs_for_model(inputs, model):
     prepared = {}
@@ -207,42 +283,32 @@ def extract_visual_features(image, item_description=""):
     #     OUTPUT:
     #     The item is 
     # """
-    # prompt = f"""
-    #     ITEM DESCRIPTION: 
-    #     {item_description}
-
-    #     TASK:
-    #     Provide a technical product description of the item in the image. 
-
-    #     RULES:
-    #     - State only visible, objective features
-    #     - Use neutral, descriptive language without subjective adjectives
-    #     - Include: material, color, finish, shape, hardware details, visible components
-    #     - Format: "The item is [type] with [primary features]. It features [secondary details]. [Additional observable characteristics]."
-    #     - Do not include: opinions, marketing language, emotional descriptors, quality judgments, or assumed functionality
-    #     - Describe only what is physically visible in the image
-
-    #     EXAMPLE:
-    #     The item is a pair of high-heeled pumps with black leather or leather-like upper material and a glossy finish. They feature red lacquered soles, stiletto heels, and platform front soles. The shoes have a closed, rounded toe design and beige/cream colored interior lining. Visible text branding appears on the interior footbed showing "Christian Louboutin" and "Paris". The heel height appears to be approximately 5-6 inches with a platform sole of approximately 1-2 inches. Both shoes are shown at an angle displaying the profile and sole construction.
-    
-    #     OUTPUT:
-    #     The item is
-    # """
     prompt = f"""
-        Analyze this item: [description] + [image].
-        
-        Extract ALL possible search terms a user might use to find this item, including: 
-        - Formal names & brands 
-        - Slang terms & nicknames 
-        - Visual attributes 
-        - Functional attributes 
-
-        Return structured JSON with search terms array.
-
-        Description: 
+        ITEM DESCRIPTION: 
         {item_description}
+
+        TASK:
+        Provide a technical product description of the item in the image. 
+
+        RULES:
+        - State only visible, objective features
+        - Use neutral, descriptive language without subjective adjectives
+        - Include: material, color, finish, shape, hardware details, visible components
+        - Format: "The item is [type] with [primary features]. It features [secondary details]. [Additional observable characteristics]."
+        - Do not include: opinions, marketing language, emotional descriptors, quality judgments, or assumed functionality
+        - Describe only what is physically visible in the image
+
+        EXAMPLE:
+        The item is a pair of high-heeled pumps with black leather or leather-like upper material and a glossy finish. They feature red lacquered soles, stiletto heels, and platform front soles. The shoes have a closed, rounded toe design and beige/cream colored interior lining. Visible text branding appears on the interior footbed showing "Christian Louboutin" and "Paris". The heel height appears to be approximately 5-6 inches with a platform sole of approximately 1-2 inches. Both shoes are shown at an angle displaying the profile and sole construction.
+    
+        OUTPUT:
+        The item is
     """
     messages = [
+        {
+            "role": "system",
+            "content": "You are a product authentication specialist"
+        },
         {
             "role": "user",
             "content": [
@@ -259,8 +325,8 @@ def extract_visual_features(image, item_description=""):
     ]
     return messages
 
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
-# MODEL_ID = "OpenGVLab/InternVL3-14B"
+# MODEL_ID = "Qwen/Qwen2.5-VL-32B-Instruct"
+MODEL_ID = "OpenGVLab/InternVL3-14B"
 MINIMUM_PIXELS = 256 * 28 * 28
 MAXIMUM_PIXELS = 1280 * 28 * 28
 QUANTIZATION_CONFIGURATION = BitsAndBytesConfig(
@@ -271,7 +337,6 @@ TRANSCRIPTIONS = [
     # "My Chanel bag",
     # "My Louboutins",
     # "My Apple Watch",
-    "My Chanel bag",
     "Okay so this is my black Chanel bag... it's the classic flap, um, I think it's called the medium or maybe the large? I always forget. It's the quilted one with the diamond pattern... caviar leather I think is what they call it. Got it for my 30th birthday from my husband, we were in Paris actually. It has the gold hardware, the chain... you can wear it crossbody or doubled up on the shoulder. Oh and it has the CC turnlock thing on the front. I usually use this for special occasions, like dinner dates or events. It's in pretty good condition, there's like a tiny scratch on the back but you can barely see it. Oh wait, I should mention it has the burgundy lining inside... maroon? Whatever that dark red color is called. There's a little pocket inside with a zipper and then an open pocket too. Still have the authenticity card somewhere.",
     "Okay these are my Louboutins... the black ones. Super high heels, like crazy high. Um, they have that platform part at the front which makes them actually possible to walk in, sort of. They're leather, really nice smooth leather. I think these are called... Daffodils? Daffodile? Something like that, I can never remember the exact name. But they're the ones with the really thick platform. Got them for my anniversary... wait no, it was my promotion actually. I remember because I wore them to the celebration dinner and my feet were killing me by the end of the night. They have the red bottom obviously, that's like the signature thing. The heel is probably... I don't know, 5 inches? 6 inches? They're definitely over 5. I've only worn them maybe three or four times total, they're more like special occasion shoes, you know? For when I need to feel really dressed up. They're in great condition still, I always put them back in the dust bag. Oh and they're a size 38.5, which is like an 8 in US sizes I think. Classic black pumps but like, the fancy version. They go with everything but honestly they're not the most comfortable things in the world. Still love them though.",
     "This is my everyday watch... the Apple Watch. It's the Series 8 I think? Or maybe 7, I can't remember. The 45mm one because I like the bigger screen. I got the aluminum case in midnight - basically black but Apple doesn't call it black for some reason. Has the sport band, also in black... or midnight, whatever. I use it mainly for fitness tracking, you know, closing my rings and all that. Also great for notifications so I don't have to pull out my phone constantly. Battery lasts about a day and a half if I'm not using it too much. Oh and I have a few other bands I switch out sometimes - a leather one for when I want to look a bit nicer, and a braided solo loop that's super comfortable. The screen has always-on display which is nice. No major scratches or anything, I've been pretty careful with it.",
@@ -317,19 +382,18 @@ print("QWEN VL: INDIVIDUAL vs BATCH PROCESSING COMPARISON")
 print("=" * 70)
 
 print("\n🔧 Initializing model...")
-model = AutoModelForImageTextToText.from_pretrained(
+from transformers import AutoTokenizer
+model = AutoModel.from_pretrained(
     MODEL_ID, 
     quantization_config=QUANTIZATION_CONFIGURATION,
     torch_dtype=torch.bfloat16,
-    # attn_implementation="flash_attention_2",
     device_map="auto",
-)
-processor = AutoProcessor.from_pretrained(
+    trust_remote_code=True,
+).eval()
+tokenizer = AutoTokenizer.from_pretrained(
     MODEL_ID, 
-    min_pixels=MINIMUM_PIXELS, 
-    max_pixels=MAXIMUM_PIXELS,
-    use_fast=True,
-    padding_side="left",
+    trust_remote_code=True, 
+    use_fast=False,
 )
 
 print("✓ Model loaded successfully")
@@ -446,52 +510,108 @@ print("\n" + "=" * 70)
 print("🟢 BATCH PROCESSING")
 print("=" * 70)
 batch_start_time = time.time()
-all_texts = []
-all_messages = []
-all_images = []
-# for image, transcription in zip(images, TRANSCRIPTIONS):
-# for image, facts in zip(images, STATED_FACTS):
+
+# Prepare images using InternVL3 format
+pixel_values_list = []
+num_patches_list = []
+questions = []
+
 for image, item_description in zip(images, ITEM_DESCRIPTIONS):
-    # messages = extract_stated_facts(transcription)
-    # messages = distill_item_description(image, facts)
-    messages = extract_visual_features(image, item_description)
-    text = processor.apply_chat_template(
-        messages, 
-        tokenize=False, 
-        add_generation_prompt=True
-    )
-    all_texts.append(text)
-    all_messages.append(messages)
-for messages in all_messages:
-    extracted_images = extract_images_from_messages(messages)
-    if extracted_images:
-        all_images.extend(extracted_images)
-if not all_images:
-    all_images = None
-print(f"\n  Processing batch of {len(all_texts)} requests...")
-inputs = processor(
-    text=[all_texts[1]],
-    images=[all_images[1]],
-    padding=True,
-    return_tensors="pt",
+    # Load image using InternVL3's method
+    pixel_values = load_image(image, max_num=12).to(torch.bfloat16).cuda()
+    pixel_values_list.append(pixel_values)
+    num_patches_list.append(pixel_values.size(0))
+    
+    # prompt = f"""        
+    #     ITEM DESCRIPTION: 
+    #     {item_description}
+
+    #     TASK:
+    #     Provide a technical product description of the item in the image
+
+    #     RULES:
+    #     - State only visible, objective features
+    #     - Use neutral, descriptive language without subjective adjectives
+    #     - Include: material, color, finish, shape, hardware details, visible components
+    #     - Format: "The item is [type] with [primary features]. It features [secondary details]. [Additional observable characteristics]."
+    #     - Do not include: opinions, marketing language, emotional descriptors, quality judgments, or assumed functionality
+    #     - Describe only what is physically visible in the image
+
+    #     OUTPUT:
+    #     The item is
+    # """
+    prompt = f"""
+        ITEM DESCRIPTION: 
+        {item_description}
+
+        INSTRUCTIONS:
+        1. Use the item description and image to identify the item in the image
+        2. Write an empirical visual description for the identified item
+        3. Include only distinguishing physical features that can be seen
+        4. Remove everything that is not a visual descriptor
+        5. Remove all markdown, special characters, and bullet points
+        6. Present the description in a paragraph
+
+        RULES:
+        - No assumptions 
+        - No interpretations
+        - No commentary
+        - No explanations
+        - No opinions
+        - No conclusions
+        - No summaries
+
+        OUTPUT:
+        The item is 
+    """
+    # prompt = f"""
+    #     You are a product authentication specialist.
+
+    #     ITEM DESCRIPTION: 
+    #     {item_description}
+
+    #     STEP 1 - IDENTIFICATION:
+    #     Use the item description and image to identify what item this is
+        
+    #     STEP 2 - FEATURE DESCRIPTION:
+    #     Describe every visible feature of the identified item
+        
+    #     RULES:
+    #     Use the item description as context
+    #     Include only what you can directly see
+    #     Prioritize brand-identifying features
+    #     Use proper grammar with articles (a/an)
+ 
+    #     FORMAT:
+    #     No assumptions, interpretations, commentary, explanations, or opinions
+    #     No markdown, special characters, or bullet points
+    #     Start with "The item is a/an [identified item] that has"
+
+    #     OUTPUT:
+    #     The item is 
+    # """
+    questions.append(f"<image>\n{prompt}")
+
+# Combine all pixel values
+all_pixel_values = torch.cat(pixel_values_list, dim=0)
+
+# Use InternVL3's batch_chat method
+generation_config = dict(max_new_tokens=2048, do_sample=False)
+print(f"\n  Processing batch of {len(questions)} requests...")
+
+responses = model.batch_chat(
+    tokenizer, 
+    all_pixel_values,
+    num_patches_list=num_patches_list,
+    questions=questions,
+    generation_config=generation_config
 )
-inputs = prepare_inputs_for_model(inputs, model)
-generated_ids = model.generate(**inputs, max_new_tokens=2048)
-new_tokens = []
-for input_tokens, full_output in zip(inputs["input_ids"], generated_ids):
-    input_length = len(input_tokens)
-    new_output = full_output[input_length:]
-    new_tokens.append(new_output)
-output_texts = processor.batch_decode(
-    new_tokens, 
-    skip_special_tokens=True, 
-    clean_up_tokenization_spaces=False
-)
+
 batch_inference_time = time.time() - batch_start_time
 print(f"  ✓ Batch completed in {batch_inference_time:.2f}s")
 print(f"\n  Batch Results:")
-for index, text in enumerate(output_texts):
-    print(f"  Result {index + 1}: {text}")
+for index, response in enumerate(responses):
+    print(f"  Result {index + 1}: {response}")
 print(f"\n📊 Batch Processing Summary:")
 print(f"  - Total time: {batch_inference_time:.2f}s")
 print(f"  - Average time per request: {batch_inference_time/len(images):.2f}s")
